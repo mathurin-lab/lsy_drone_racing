@@ -139,6 +139,8 @@ class RacingController(Controller):
     max_lon_acc = MAX_LON_ACC
     unknown_gate_speed = UNKNOWN_GATE_SPEED
     unknown_obstacle_speed = UNKNOWN_OBSTACLE_SPEED
+    unknown_obstacle_radius = UNKNOWN_OBSTACLE_RADIUS
+    gate_approach_dist = GATE_APPROACH_DIST
 
     def __init__(self, obs: dict[str, NDArray[np.floating]], info: dict, config: dict):
         """Initialize the controller and plan the initial trajectory.
@@ -235,7 +237,7 @@ class RacingController(Controller):
         if GATE_APPROACH_SHIFT > 0:
             steps = np.linspace(0.0, GATE_APPROACH_SHIFT, 4)[1:]
             shifts += [x for step in steps for x in (step, -step)]
-        for dist in np.linspace(GATE_APPROACH_DIST, GATE_APPROACH_MIN, 6):
+        for dist in np.linspace(self.gate_approach_dist, GATE_APPROACH_MIN, 6):
             for shift in shifts:
                 point = center + dist * direction + shift * side
                 d = np.linalg.norm(self._obstacles_pos[:, :2] - point[:2], axis=1)
@@ -476,7 +478,8 @@ class RacingController(Controller):
             near = np.linalg.norm(pts - gate_pos, axis=1) < UNKNOWN_GATE_RADIUS
             v[near] = np.minimum(v[near], self.unknown_gate_speed)
         for obstacle_pos in self._obstacles_pos[~self._obstacles_visited]:
-            near = np.linalg.norm(pts[:, :2] - obstacle_pos[:2], axis=1) < UNKNOWN_OBSTACLE_RADIUS
+            near = np.linalg.norm(pts[:, :2] - obstacle_pos[:2], axis=1)
+            near = near < self.unknown_obstacle_radius
             v[near] = np.minimum(v[near], self.unknown_obstacle_speed)
         v[0] = min(v[0], float(np.linalg.norm(start_vel)))
         for i in range(n):

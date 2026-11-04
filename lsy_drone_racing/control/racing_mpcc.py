@@ -115,7 +115,7 @@ G3_VIA_OUT = (0.749, -0.094, -0.054)  # Via point after gate 3 [m]
 # (lateral offset < G3_FLIP_Y), it is passed on the +y side instead
 G3_IN = (0.5, -0.3)  # Approach slope of gate 3 for a pass on the -y / +y side
 VIA3_Y = (-0.3, 0.2)  # Lateral offset of the via point before gate 3 [m]
-G3_BIAS = (0.14, 0.0)  # Lateral offset of the gate 3 crossing (compensates a tracking error) [m]
+G3_BIAS = (0.18, 0.0)  # Lateral offset of the gate 3 crossing (compensates a tracking error) [m]
 G3_FLIP_Y = -0.1  # [m]
 # Thrust scale estimation (randomized mass and model mismatch)
 THRUST_EST_TAU = 0.3  # Time constant [s] (0: disabled)

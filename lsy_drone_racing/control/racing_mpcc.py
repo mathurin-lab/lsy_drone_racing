@@ -51,17 +51,17 @@ GATE_SIGMA = 0.1  # Arc length scale of the decay of the gate emphasis [m]
 GATE_BEFORE = 0.5  # Full emphasis from this arc length before the gate center [m]
 GATE_AFTER = 0.25  # ... to this arc length after it [m]
 Q_LAG = 300.0  # Lag error weight (keeps theta at the drone position)
-Q_PROGRESS = 5  # Weight pulling v_theta towards V_REF (progress reward)
+Q_PROGRESS = 6  # Weight pulling v_theta towards V_REF (progress reward)
 V_REF = 10.0  # Reference progress speed [m/s]
 V_MAX = 6.0  # Maximum progress speed [m/s]
 A_THETA_MAX = 30.0  # Maximum progress acceleration [m/s^2]
 # Gates are revealed only 0.7 m before them: approaching a gate whose exact pose is unknown, the
 # speed is limited so that the drone can still correct the offset after the observation.
-V_UNKNOWN = 2.4  # Speed limit before unknown gates [m/s]
-V_UNKNOWN0 = 2.4  # Speed limit before gate 0 while unknown [m/s]
-V_UNKNOWN3 = 1.7  # Speed limit before gate 3 while unknown (tight approach around its pole) [m/s]
+V_UNKNOWN = 2.2  # Speed limit before unknown gates [m/s]
+V_UNKNOWN0 = 2.2  # Speed limit before gate 0 while unknown [m/s]
+V_UNKNOWN3 = 2.2  # Speed limit before gate 3 while unknown (tight approach around its pole) [m/s]
 SLOW_BEFORE = 1.2  # Arc length before the gate center where the limit applies [m]
-SPEED_SLACK_W = 1e4  # Penalty of the (squared) speed limit violation
+SPEED_SLACK_W = 1e3  # Penalty of the (squared) speed limit violation
 Q_DRPY = 5.0  # Attitude rate weight
 R_RPY = 20.0  # Attitude command weight
 R_THRUST = 5.0  # Weight of the thrust command deviation from hover

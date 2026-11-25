@@ -23,7 +23,8 @@ The controller requires ``control_mode = "attitude"`` in the config.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, NamedTuple
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, ClassVar, NamedTuple
 
 import casadi as cs
 import numpy as np
@@ -40,86 +41,103 @@ from lsy_drone_racing.control import Controller
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
-# Horizon
-N_HORIZON = 30  # Number of prediction steps
-T_HORIZON = 0.6  # Prediction horizon [s]
-MAX_TILT = 1.0  # Maximum roll and pitch [rad]
-# Cost weights
-Q_CONTOUR = 4000.0  # Contour error weight away from the gates
-Q_CONTOUR_GATE = 3000.0  # Additional contour error weight at the gate centers
-GATE_SIGMA = 0.1  # Arc length scale of the decay of the gate emphasis [m]
-GATE_BEFORE = 0.5  # Full emphasis from this arc length before the gate center [m]
-GATE_AFTER = 0.25  # ... to this arc length after it [m]
-Q_LAG = 300.0  # Lag error weight (keeps theta at the drone position)
-Q_PROGRESS = 6  # Weight pulling v_theta towards V_REF (progress reward)
-V_REF = 10.0  # Reference progress speed [m/s]
-V_MAX = 6.0  # Maximum progress speed [m/s]
-A_THETA_MAX = 30.0  # Maximum progress acceleration [m/s^2]
-# Gates are revealed only 0.7 m before them: approaching a gate whose exact pose is unknown, the
-# speed is limited so that the drone can still correct the offset after the observation.
-V_UNKNOWN = 2.2  # Speed limit before unknown gates [m/s]
-V_UNKNOWN0 = 2.2  # Speed limit before gate 0 while unknown [m/s]
-V_UNKNOWN3 = 2.2  # Speed limit before gate 3 while unknown (tight approach around its pole) [m/s]
-SLOW_BEFORE = 1.2  # Arc length before the gate center where the limit applies [m]
-SPEED_SLACK_W = 1e3  # Penalty of the (squared) speed limit violation
-Q_DRPY = 5.0  # Attitude rate weight
-R_RPY = 20.0  # Attitude command weight
-R_THRUST = 5.0  # Weight of the thrust command deviation from hover
-R_A_THETA = 0.01  # Progress acceleration weight
-Q_RP = 0.0  # Roll and pitch weight
-Q_YAW = 50.0  # Yaw weight (zero yaw)
-R_DU = 5.0  # Weight of the difference between the attitude command and the attitude
-R_D_RPY = 0.01  # Weight of the attitude command rate
-R_D_THRUST = 0.1  # Weight of the thrust command rate
-D_RPY_MAX = 30.0  # Maximum attitude command rate [rad/s]
-D_THRUST_MAX = 15.0  # Maximum thrust command rate [N/s]
-# Poles (soft constraints)
-POLE_RADIUS = 0.2  # Minimum horizontal distance from the pole axes [m]
-POLE_SLACK_W = 1e6  # Penalty of the constraint violation
-# Real-time iterations per control step (more right after a path change, when the previous
-# solution is a poor initialization)
-RTI_ITERS = 3
-RTI_ITERS_CHANGE = 4  # Iterations during the steps after a path change
-# Stuck detection
-STUCK_SPEED = 0.3  # [m/s]
-STUCK_TIME = 0.4  # [s]
-STUCK_SKIP = 0.25  # Progress jump [m]
-# Gate tunnel (soft constraint on the offset from the gate center in the gate plane)
-TUNNEL_RADIUS = 0.08  # [m]
-TUNNEL_HALF_LEN = 0.3  # Arc length around the gate center in which it is active [m]
-TUNNEL_SLACK_W = 1e5
-SLACK_LIN = 0.1  # Linear slack penalty relative to the quadratic one
-# Path
-POLE_CLEAR = 0.25  # The path is pushed out of this horizontal distance from the poles [m] (0: off)
-POLE_SMOOTH = 0.1  # Arc length scale of the smoothing of the push [m]
-POLE_PUSH_GAIN = 1.5  # Compensation of the smoothing
-POLE_GATE_FREE = 0.2  # No push within this arc length from the gate centers [m]
-POLE_PUSH_ITERS = 2  # Repetitions of the push (the smoothing may leave the path too close)
-GATE_AXIS_D = 0.25  # Distance of the exit points from the gate centers [m]
-GATE_PRE_D = 0.15  # Distance of the approach points from the gate centers [m]
-FINISH_D = 1.0  # Distance of the path end after the last gate [m]
-# Route shape (offsets in the frame of the named gate, x: through the gate; slopes: lateral offset
-# per distance along the gate axis of the approach/exit). Several gates have a pole on their axis.
-START_VIA = (-1.0, 0.3, 0.4)  # Start detour (world frame) within the sensor range of gate 2 [m]
-FIRST_VIA = (-0.6, -0.4, -0.1)  # Via point before gate 0, beside the pole on its axis [m]
-G0_IN = 0.5  # Approach slope of gate 0
-G0_VIA = (0.36, -0.04, 0.1191)  # Via point after gate 0 (clear of pole 1) [m]
-G1_VIA = (-0.8605, 0.2831, -0.13)  # Via point before gate 1 [m]
-G2_OUT = 0.55  # Exit slope of gate 2 (pole on its axis behind it)
-VIA2 = (0.5, 0.5, 0.17)  # U-turn after gate 2 around the pole behind it [m]
-VIA2B = (0.15, 0.85, 0.3)  # [m]
-VIA3_X = -0.6  # Via point before gate 3, beside the pole on its axis [m]
-VIA3_Z = -0.06  # [m]
-G3_VIA_OUT = (0.749, -0.094, -0.054)  # Via point after gate 3 [m]
-# Gate 3: the pole is passed on the -y side; if the revealed pole lies on that side of the gate axis
-# (lateral offset < G3_FLIP_Y), it is passed on the +y side instead
-G3_IN = (0.5, -0.3)  # Approach slope of gate 3 for a pass on the -y / +y side
-VIA3_Y = (-0.3, 0.2)  # Lateral offset of the via point before gate 3 [m]
-G3_BIAS = (0.18, 0.0)  # Lateral offset of the gate 3 crossing (compensates a tracking error) [m]
-G3_FLIP_Y = -0.1  # [m]
-# Thrust scale estimation (randomized mass and model mismatch)
-THRUST_EST_TAU = 0.3  # Time constant [s] (0: disabled)
-THRUST_EST_LIMITS = (0.75, 1.35)
+
+@dataclass(frozen=True)
+class MPCCTuning:
+    """Tuning parameters of the controller (controller-internal, the track is not changed).
+
+    The variants of the controller (other files in this directory) subclass :class:`RacingMPCC` and
+    replace some of these values. Lengths in [m], speeds in [m/s], angles in [rad].
+    """
+
+    # Horizon
+    n_horizon: int = 30  # Number of prediction steps
+    t_horizon: float = 0.6  # Prediction horizon [s]
+    max_tilt: float = 1.0  # Maximum roll and pitch
+    # Cost weights
+    q_contour: float = 4000.0  # Contour error weight away from the gates
+    q_contour_gate: float = 3000.0  # Additional contour error weight at the gate centers
+    gate_sigma: float = 0.1  # Arc length scale of the decay of the gate emphasis
+    gate_before: float = 0.5  # Full emphasis from this arc length before the gate center ...
+    gate_after: float = 0.25  # ... to this arc length after it
+    q_lag: float = 300.0  # Lag error weight (keeps theta at the drone position)
+    q_progress: float = 6.0  # Weight pulling v_theta towards v_ref (progress reward)
+    v_ref: float = 10.0  # Reference progress speed
+    v_max: float = 6.0  # Maximum progress speed
+    a_theta_max: float = 30.0  # Maximum progress acceleration [m/s^2]
+    q_drpy: float = 5.0  # Attitude rate weight
+    r_rpy: float = 20.0  # Attitude command weight
+    r_thrust: float = 5.0  # Weight of the thrust command deviation from hover
+    r_a_theta: float = 0.01  # Progress acceleration weight
+    q_rp: float = 0.0  # Roll and pitch weight
+    q_yaw: float = 50.0  # Yaw weight (zero yaw)
+    r_du: float = 5.0  # Weight of the difference between the attitude command and the attitude
+    r_d_rpy: float = 0.01  # Weight of the attitude command rate
+    r_d_thrust: float = 0.1  # Weight of the thrust command rate
+    d_rpy_max: float = 30.0  # Maximum attitude command rate [rad/s]
+    d_thrust_max: float = 15.0  # Maximum thrust command rate [N/s]
+    # Speed limits (soft constraints on the squared speed). Gates are revealed only 0.7 m before
+    # them: approaching a gate whose exact pose is unknown, the speed is limited so that the drone
+    # can still correct the offset after the observation.
+    v_unknown: float = 2.2  # Before unknown gates
+    v_unknown0: float = 2.2  # Before gate 0 while unknown
+    v_unknown3: float = 2.2  # Before gate 3 while unknown (tight approach around its pole)
+    slow_before: float = 1.2  # Arc length before the gate center where the limits apply
+    v_last: float = 100.0  # Before the last gate of the sequence, known or not (100: off)
+    last_before: float = 1.0  # Arc length before the last gate center where v_last applies
+    speed_slack_w: float = 1e3  # Penalty of the violation
+    # Poles (soft constraints)
+    pole_radius: float = 0.2  # Minimum horizontal distance from the pole axes
+    pole_slack_w: float = 1e6  # Penalty of the violation
+    # Real-time iterations per control step (more right after a path change, when the previous
+    # solution is a poor initialization)
+    rti_iters: int = 3
+    rti_iters_change: int = 4
+    # Stuck detection (e.g. a pole revealed on the path): the progress jumps forward
+    stuck_speed: float = 0.3
+    stuck_time: float = 0.4  # [s]
+    stuck_skip: float = 0.25
+    stuck_hold: bool = False  # The progress never falls back behind a jump (else it may)
+    # Gate tunnel (soft constraint on the offset from the gate center in the gate plane)
+    tunnel_radius: float = 0.08
+    tunnel_half_len: float = 0.3  # Arc length before the gate center in which it is active
+    tunnel_after: float = 0.3  # ... and after it (the path may already turn there)
+    tunnel_slack_w: float = 1e5
+    slack_lin: float = 0.1  # Linear slack penalty relative to the quadratic one
+    # Path: samples are pushed out of the clearance radius of the poles (0: off), smoothly along
+    # the arc length and not near the gate centers
+    pole_clear: float = 0.25
+    pole_smooth: float = 0.1  # Arc length scale of the smoothing of the push
+    pole_push_gain: float = 1.5  # Compensation of the smoothing
+    pole_gate_free: float = 0.2  # No push within this arc length from the gate centers
+    pole_push_iters: int = 2  # Repetitions (the smoothing may leave the path too close)
+    gate_axis_d: float = 0.25  # Distance of the exit points from the gate centers
+    gate_pre_d: float = 0.15  # Distance of the approach points from the gate centers
+    last_pre_d: float = 0.0  # Extra approach point on the axis of the last gate (0: none)
+    finish_d: float = 1.0  # Distance of the path end after the last gate
+    # Route shape: offsets in the frame of the named gate (x: through the gate); slopes: lateral
+    # offset per distance along the gate axis of the approach/exit. Several gates have a pole on
+    # their axis.
+    start_via: tuple[float, ...] = (-1.0, 0.3, 0.4)  # Start detour (world) that reveals gate 2
+    first_via: tuple[float, ...] = (-0.6, -0.4, -0.1)  # Before gate 0, beside its axis pole
+    g0_in: float = 0.5  # Approach slope of gate 0
+    g0_via: tuple[float, ...] = (0.36, -0.04, 0.1191)  # After gate 0, clear of pole 1
+    g1_via: tuple[float, ...] = (-0.8605, 0.2831, -0.13)  # Before gate 1
+    g2_out: float = 0.55  # Exit slope of gate 2 (pole on its axis behind it)
+    via2: tuple[float, ...] = (0.5, 0.5, 0.17)  # U-turn after gate 2 around the pole behind it
+    via2b: tuple[float, ...] = (0.15, 0.85, 0.3)
+    via3_x: float = -0.6  # Via point before gate 3, beside the pole on its axis
+    via3_z: float = -0.06
+    g3_via_out: tuple[float, ...] = (0.749, -0.094, -0.054)  # After gate 3
+    # Gate 3: the pole is passed on the -y side; if the revealed pole lies on that side of the gate
+    # axis (lateral offset < g3_flip_y), it is passed on the +y side instead. Pairs: (-y, +y) side.
+    g3_in: tuple[float, ...] = (0.5, -0.3)  # Approach slope
+    via3_y: tuple[float, ...] = (-0.3, 0.2)  # Lateral offset of the via point before the gate
+    g3_bias: tuple[float, ...] = (0.18, 0.0)  # Lateral offset of the crossing (tracking error)
+    g3_flip_y: float = -0.1
+    # Thrust scale estimation (randomized mass and model mismatch)
+    thrust_est_tau: float = 0.3  # Time constant [s] (0: disabled)
+    thrust_est_limits: tuple[float, ...] = (0.75, 1.35)
 
 
 class Passage(NamedTuple):
@@ -130,26 +148,25 @@ class Passage(NamedTuple):
     bias: float = 0.0
 
 
-def _route(flip3: bool) -> list[tuple[int, Passage | tuple[float, float, float]]]:
+def _route(t: MPCCTuning, flip3: bool) -> list[tuple[int, Passage | tuple[float, float, float]]]:
     """Route as (gate ID, element) pairs; an element is a gate passage or a via point.
 
     Via points are offsets in the frame of the gate. They come from an offline optimization of the
-    racing line on randomly perturbed tracks. The route is built on demand so that the module
-    parameters can be changed (parameter studies).
+    racing line on randomly perturbed tracks.
     """
     side = int(flip3)
     return [
-        (0, FIRST_VIA),
-        (0, Passage(slope_in=G0_IN)),
-        (0, G0_VIA),
-        (1, G1_VIA),
+        (0, t.first_via),
+        (0, Passage(slope_in=t.g0_in)),
+        (0, t.g0_via),
+        (1, t.g1_via),
         (1, Passage()),
-        (2, Passage(slope_out=G2_OUT)),
-        (2, VIA2),
-        (2, VIA2B),
-        (3, (VIA3_X, VIA3_Y[side], VIA3_Z)),
-        (3, Passage(slope_in=G3_IN[side], bias=G3_BIAS[side])),
-        (3, G3_VIA_OUT),
+        (2, Passage(slope_out=t.g2_out)),
+        (2, t.via2),
+        (2, t.via2b),
+        (3, (t.via3_x, t.via3_y[side], t.via3_z)),
+        (3, Passage(slope_in=t.g3_in[side], bias=t.g3_bias[side])),
+        (3, t.g3_via_out),
         (1, Passage()),
     ]
 
@@ -159,32 +176,40 @@ NP = 24  # Number of stage parameters
 
 
 def _push_from_poles(
-    dense: NDArray[np.floating], s: NDArray[np.floating], poles: NDArray, gate_s: NDArray
+    dense: NDArray[np.floating],
+    s: NDArray[np.floating],
+    poles: NDArray,
+    gate_s: NDArray,
+    t: MPCCTuning,
 ) -> NDArray[np.floating]:
     """Push path samples horizontally out of the clearance radius of the poles (smoothed)."""
     offset = np.zeros_like(dense)
     for pole in poles[:, :2]:
         delta = dense[:, :2] - pole
         d = np.maximum(np.linalg.norm(delta, axis=1), 1e-6)
-        push = np.maximum(POLE_CLEAR - d, 0.0)
+        push = np.maximum(t.pole_clear - d, 0.0)
         offset[:, :2] += (delta / d[:, None]) * push[:, None]
-    near_gate = np.min(np.abs(s[:, None] - gate_s[None, :]), axis=1) < POLE_GATE_FREE
+    near_gate = np.min(np.abs(s[:, None] - gate_s[None, :]), axis=1) < t.pole_gate_free
     offset[near_gate] = 0.0
     ds = float(np.mean(np.diff(s)))
-    offset = gaussian_filter1d(offset, POLE_SMOOTH / ds, axis=0, mode="nearest")
+    offset = gaussian_filter1d(offset, t.pole_smooth / ds, axis=0, mode="nearest")
     # The smoothing shrinks the push: rescale so that the clearance is reached
-    return dense + POLE_PUSH_GAIN * offset
+    return dense + t.pole_push_gain * offset
 
 
 class Path:
     """Arc length parameterized cubic spline path with the arc lengths of the gate centers."""
 
     def __init__(
-        self, points: NDArray[np.floating], gate_idx: list[int], poles: NDArray | None = None
+        self,
+        points: NDArray[np.floating],
+        gate_idx: list[int],
+        poles: NDArray | None = None,
+        t: MPCCTuning | None = None,
     ):
         """Build the path through the points; gate_idx are the indices of the gate centers.
 
-        Path samples closer than POLE_CLEAR to a pole are pushed away horizontally (smoothly, and
+        Path samples closer than t.pole_clear to a pole are pushed away horizontally (smoothly, and
         not near the gate centers) so that the path never runs into a pole revealed late.
         """
         chord = np.linalg.norm(np.diff(points, axis=0), axis=1)
@@ -194,8 +219,9 @@ class Path:
         dense = spline(uu)
         s = np.concatenate(([0.0], np.cumsum(np.linalg.norm(np.diff(dense, axis=0), axis=1))))
         gate_s = np.interp(u[gate_idx], uu, s[: len(uu)])
-        for _ in range(int(POLE_PUSH_ITERS) if poles is not None and POLE_CLEAR > 0 else 0):
-            dense = _push_from_poles(dense, s, poles, gate_s)
+        t = t or MPCCTuning()
+        for _ in range(int(t.pole_push_iters) if poles is not None and t.pole_clear > 0 else 0):
+            dense = _push_from_poles(dense, s, poles, gate_s, t)
             s = np.concatenate(([0.0], np.cumsum(np.linalg.norm(np.diff(dense, axis=0), axis=1))))
             gate_s = np.interp(u[gate_idx], uu, s[: len(uu)])
         self.s = np.arange(0.0, s[-1], 0.01)
@@ -222,10 +248,18 @@ class Path:
         return float(self.s[idx[int(np.argmin(d))]])
 
 
-def _create_solver(params: dict) -> AcadosOcpSolver:
+def _create_solver(params: dict, t: MPCCTuning) -> AcadosOcpSolver:
     """Create the acados solver (cached per configuration of the build-time parameters)."""
-    key = (N_HORIZON, T_HORIZON, MAX_TILT, V_MAX, A_THETA_MAX, D_RPY_MAX, D_THRUST_MAX)
-    key += (POLE_RADIUS, POLE_SLACK_W, TUNNEL_SLACK_W, SLACK_LIN, SPEED_SLACK_W)
+    key = (
+        t.n_horizon,
+        t.t_horizon,
+        t.max_tilt,
+        t.v_max,
+        t.a_theta_max,
+        t.d_rpy_max,
+        t.d_thrust_max,
+    )
+    key += (t.pole_radius, t.pole_slack_w, t.tunnel_slack_w, t.slack_lin, t.speed_slack_w)
     if key in _SOLVERS:
         return _SOLVERS[key]
     common = {
@@ -283,8 +317,8 @@ def _create_solver(params: dict) -> AcadosOcpSolver:
     ocp = AcadosOcp()
     ocp.model = model
     nx, nu = x.rows(), u.rows()
-    ocp.solver_options.N_horizon = N_HORIZON
-    ocp.solver_options.tf = T_HORIZON
+    ocp.solver_options.N_horizon = t.n_horizon
+    ocp.solver_options.tf = t.t_horizon
     ocp.cost.cost_type, ocp.cost.cost_type_e = "NONLINEAR_LS", "NONLINEAR_LS"
     ocp.cost.W = np.eye(y.rows())
     ocp.cost.W_e = np.eye(y_e.rows())
@@ -292,19 +326,23 @@ def _create_solver(params: dict) -> AcadosOcpSolver:
     ocp.parameter_values = np.zeros(NP)
     t_min, t_max = 4 * params["thrust_min"], 4 * params["thrust_max"]
     ocp.constraints.idxbx = np.array([3, 4, 17, 18, 19, 20, 21])
-    ocp.constraints.lbx = np.array([-MAX_TILT, -MAX_TILT, 0.0, -MAX_TILT, -MAX_TILT, -0.3, t_min])
-    ocp.constraints.ubx = np.array([MAX_TILT, MAX_TILT, V_MAX, MAX_TILT, MAX_TILT, 0.3, t_max])
+    ocp.constraints.lbx = np.array(
+        [-t.max_tilt, -t.max_tilt, 0.0, -t.max_tilt, -t.max_tilt, -0.3, t_min]
+    )
+    ocp.constraints.ubx = np.array(
+        [t.max_tilt, t.max_tilt, t.v_max, t.max_tilt, t.max_tilt, 0.3, t_max]
+    )
     ocp.constraints.idxbu = np.arange(nu)
-    ocp.constraints.lbu = -np.array([*[D_RPY_MAX] * 3, D_THRUST_MAX, A_THETA_MAX])
-    ocp.constraints.ubu = np.array([*[D_RPY_MAX] * 3, D_THRUST_MAX, A_THETA_MAX])
+    ocp.constraints.lbu = -np.array([*[t.d_rpy_max] * 3, t.d_thrust_max, t.a_theta_max])
+    ocp.constraints.ubu = np.array([*[t.d_rpy_max] * 3, t.d_thrust_max, t.a_theta_max])
     ocp.constraints.x0 = np.zeros(nx)
-    ocp.constraints.lh = np.array([POLE_RADIUS**2] * 4 + [0.0, 0.0])
+    ocp.constraints.lh = np.array([t.pole_radius**2] * 4 + [0.0, 0.0])
     ocp.constraints.uh = np.full(6, 1e3)
     ocp.constraints.idxsh = np.arange(6)
-    ocp.cost.Zl = np.array([POLE_SLACK_W] * 4 + [0.0, 0.0])
-    ocp.cost.Zu = np.array([0.0] * 4 + [TUNNEL_SLACK_W, SPEED_SLACK_W])
-    ocp.cost.zl = SLACK_LIN * ocp.cost.Zl
-    ocp.cost.zu = SLACK_LIN * ocp.cost.Zu
+    ocp.cost.Zl = np.array([t.pole_slack_w] * 4 + [0.0, 0.0])
+    ocp.cost.Zu = np.array([0.0] * 4 + [t.tunnel_slack_w, t.speed_slack_w])
+    ocp.cost.zl = t.slack_lin * ocp.cost.Zl
+    ocp.cost.zu = t.slack_lin * ocp.cost.Zu
     ocp.solver_options.qp_solver = "PARTIAL_CONDENSING_HPIPM"
     ocp.solver_options.hessian_approx = "GAUSS_NEWTON"
     ocp.solver_options.integrator_type = "ERK"
@@ -321,12 +359,15 @@ def _create_solver(params: dict) -> AcadosOcpSolver:
 class RacingMPCC(Controller):
     """Model predictive contouring control racing controller (attitude interface)."""
 
+    TUNING: ClassVar[MPCCTuning] = MPCCTuning()  # Replaced by the variants of the controller
+
     def __init__(self, obs: dict[str, NDArray[np.floating]], info: dict, config: dict):
         """Build the path and the solver."""
         super().__init__(obs, info, config)
+        self._t = self.TUNING
         self._dt = 1 / config.env.freq
         self._params = load_params(Dynamics.so_rpy_rotor_drag, config.sim.drone)
-        self._solver = _create_solver(self._params)
+        self._solver = _create_solver(self._params, self._t)
         self._solver.reset()
         self._nx = 22
         p = self._params
@@ -341,6 +382,7 @@ class RacingMPCC(Controller):
         self._fail_count = 0
         self._iters_left = 0
         self._slow_time = 0.0
+        self._theta_floor = 0.0
         self._thrust_state = 0.0
         self._thrust_scale = 1.0
         self._last_vel = self._last_quat = None
@@ -360,14 +402,17 @@ class RacingMPCC(Controller):
         ):
             return False
         self._gates_pos, self._gates_quat, self._obstacles_pos = gp.copy(), gq.copy(), op.copy()
-        points, gate_idx, gate_ids = [self._start, np.array(START_VIA)], [], []
-        flip3 = self._pole_local(3, 3)[1] < G3_FLIP_Y
-        for gate_id, element in _route(flip3):
+        points, gate_idx, gate_ids = [self._start, np.array(self._t.start_via)], [], []
+        flip3 = self._pole_local(3, 3)[1] < self._t.g3_flip_y
+        route = _route(self._t, flip3)
+        for k, (gate_id, element) in enumerate(route):
             rot = R.from_quat(gq[gate_id])
             if isinstance(element, Passage):  # Approach point, gate center and exit point
                 bias = np.array([0.0, element.bias, 0.0])
-                pre = [-GATE_PRE_D, -element.slope_in * GATE_PRE_D, 0.0]
-                post = [GATE_AXIS_D, element.slope_out * GATE_AXIS_D, 0.0]
+                if k == len(route) - 1 and self._t.last_pre_d > 0:  # Straight final approach
+                    points.append(gp[gate_id] + rot.apply([-self._t.last_pre_d, 0.0, 0.0]))
+                pre = [-self._t.gate_pre_d, -element.slope_in * self._t.gate_pre_d, 0.0]
+                post = [self._t.gate_axis_d, element.slope_out * self._t.gate_axis_d, 0.0]
                 points.append(gp[gate_id] + rot.apply(np.add(pre, bias)))
                 gate_idx.append(len(points))
                 gate_ids.append(gate_id)
@@ -376,8 +421,8 @@ class RacingMPCC(Controller):
             else:
                 points.append(gp[gate_id] + rot.apply(element))
         last = self._sequence[-1]
-        points.append(gp[last] + R.from_quat(gq[last]).apply([FINISH_D, 0.0, 0.0]))
-        self._path = Path(np.array(points), gate_idx, op)
+        points.append(gp[last] + R.from_quat(gq[last]).apply([self._t.finish_d, 0.0, 0.0]))
+        self._path = Path(np.array(points), gate_idx, op, self._t)
         self._gate_of_center = np.array(gate_ids)
         return True
 
@@ -393,22 +438,35 @@ class RacingMPCC(Controller):
         gate_ids = self._gate_of_center[k]
         rot = R.from_quat(self._gates_quat[gate_ids]).as_matrix()  # (n, 3, 3)
         gates = np.concatenate((self._gates_pos[gate_ids], rot[:, :, 1], rot[:, :, 2]), axis=1)
-        self._tunnel_active = np.abs(thetas - self._path.gate_s[k]) < TUNNEL_HALF_LEN
+        rel = thetas - self._path.gate_s[k]
+        self._tunnel_active = (rel > -self._t.tunnel_half_len) & (rel < self._t.tunnel_after)
         return np.concatenate((pd, tg, thetas[:, None], poles, gates), axis=1)
 
     def _slow_stages(self, thetas: NDArray[np.floating], visited: NDArray[np.bool_]) -> NDArray:
-        """Squared speed limit per stage: low just before the centers of gates that are unknown."""
+        """Squared speed limit per stage.
+
+        The speed is low just before the centers of gates that are unknown, and before the last
+        gate (v_last) where the drone would otherwise arrive at its top speed.
+        """
+        t = self._t
         rel = self._path.gate_s[None, :] - thetas[:, None]  # (stages, gate passages)
         unknown = ~visited[self._gate_of_center]
-        before = (rel > -0.05) & (rel < SLOW_BEFORE)
-        v_max = np.choose(self._gate_of_center, [V_UNKNOWN0, V_UNKNOWN, V_UNKNOWN, V_UNKNOWN3])
-        slow = before & unknown[None, :]
-        return np.min(np.where(slow, v_max[None, :] ** 2, 1e3), axis=1)
+        slow = (rel > -0.05) & (rel < t.slow_before) & unknown[None, :]
+        v_max = np.choose(
+            self._gate_of_center, [t.v_unknown0, t.v_unknown, t.v_unknown, t.v_unknown3]
+        )
+        limit = np.min(np.where(slow, v_max[None, :] ** 2, 1e3), axis=1)
+        last = (rel[:, -1] > -0.05) & (rel[:, -1] < t.last_before)
+        return np.where(last, np.minimum(limit, t.v_last**2), limit)
 
     def _contour_weight(self, thetas: NDArray[np.floating]) -> NDArray[np.floating]:
         rel = thetas[:, None] - self._path.gate_s[None, :]
-        d = np.maximum(np.maximum(-rel - GATE_BEFORE, rel - GATE_AFTER), 0.0).min(axis=1)
-        return Q_CONTOUR + Q_CONTOUR_GATE * np.exp(-0.5 * (d / GATE_SIGMA) ** 2)
+        d = np.maximum(np.maximum(-rel - self._t.gate_before, rel - self._t.gate_after), 0.0).min(
+            axis=1
+        )
+        return self._t.q_contour + self._t.q_contour_gate * np.exp(
+            -0.5 * (d / self._t.gate_sigma) ** 2
+        )
 
     # endregion
 
@@ -416,12 +474,16 @@ class RacingMPCC(Controller):
         x = np.zeros(self._nx)
         x[:3] = self._start
         x[18:22] = self._cmd
-        for j in range(N_HORIZON + 1):
+        for j in range(self._t.n_horizon + 1):
             self._solver.set(j, "x", x)
 
     def _update_thrust_scale(self, obs: dict):
         vel = np.asarray(obs["vel"], float)
-        if THRUST_EST_TAU > 0 and self._last_vel is not None and float(obs["pos"][2]) > 0.05:
+        if (
+            self._t.thrust_est_tau > 0
+            and self._last_vel is not None
+            and float(obs["pos"][2]) > 0.05
+        ):
             p = self._params
             acc = (vel - self._last_vel) / self._dt
             b3 = R.from_quat(self._last_quat).apply([0.0, 0.0, 1.0])
@@ -429,8 +491,10 @@ class RacingMPCC(Controller):
             measured = float((acc - np.asarray(p["gravity_vec"]) - drag) @ b3)
             predicted = (p["acc_coef"] + p["cmd_f_coef"] * self._thrust_state) / p["mass"]
             if predicted > 1.0:
-                ratio = np.clip(measured / predicted, *THRUST_EST_LIMITS)
-                self._thrust_scale += self._dt / THRUST_EST_TAU * (ratio - self._thrust_scale)
+                ratio = np.clip(measured / predicted, *self._t.thrust_est_limits)
+                self._thrust_scale += (
+                    self._dt / self._t.thrust_est_tau * (ratio - self._thrust_scale)
+                )
         self._last_vel = vel
         self._last_quat = np.asarray(obs["quat"], float)
 
@@ -454,23 +518,27 @@ class RacingMPCC(Controller):
         vel = np.asarray(obs["vel"], float)
         changed = self._update_track(obs)
         if changed:
-            self._iters_left = int(RTI_ITERS_CHANGE)
+            self._iters_left = int(self._t.rti_iters_change)
         self._update_thrust_scale(obs)
         # Stuck detection (e.g. a pole revealed on the path): push the progress forward
         t = self._tick * self._dt
         self._slow_time = (
-            self._slow_time + self._dt if (t > 1.0 and np.linalg.norm(vel) < STUCK_SPEED) else 0.0
+            self._slow_time + self._dt
+            if (t > 1.0 and np.linalg.norm(vel) < self._t.stuck_speed)
+            else 0.0
         )
-        if self._slow_time > STUCK_TIME:
-            self._theta = min(self._theta + STUCK_SKIP, self._path.length)
+        if self._slow_time > self._t.stuck_time:
+            self._theta = min(self._theta + self._t.stuck_skip, self._path.length)
             self._slow_time = 0.0
+            if self._t.stuck_hold:
+                self._theta_floor = self._theta
         theta = self._path.project(pos, self._theta, 0.3, 0.6)
-        self._theta = max(theta, self._theta - 0.05)
+        self._theta = max(theta, self._theta - 0.05, self._theta_floor)
         _, tg0 = self._path(np.array([self._theta]))
-        v_theta = float(np.clip(vel @ tg0[0], 0.0, V_MAX))
-        dt = T_HORIZON / N_HORIZON
+        v_theta = float(np.clip(vel @ tg0[0], 0.0, self._t.v_max))
+        dt = self._t.t_horizon / self._t.n_horizon
         if self._theta_pred is None:
-            thetas = self._theta + v_theta * dt * np.arange(N_HORIZON + 1)
+            thetas = self._theta + v_theta * dt * np.arange(self._t.n_horizon + 1)
         else:
             shifted = np.concatenate(
                 (self._theta_pred[1:], [2 * self._theta_pred[-1] - self._theta_pred[-2]])
@@ -488,24 +556,39 @@ class RacingMPCC(Controller):
         slow = self._slow_stages(thetas, np.asarray(obs["gates_visited"], bool))
         qc = self._contour_weight(thetas)
         yref = np.zeros(23)
-        yref[4] = V_REF
-        for j in range(N_HORIZON + 1):
+        yref[4] = self._t.v_ref
+        for j in range(self._t.n_horizon + 1):
             self._solver.set(j, "p", prm[j])
-            if 0 < j < N_HORIZON:
-                uh = TUNNEL_RADIUS**2 if self._tunnel_active[j] else 1e3
+            if 0 < j < self._t.n_horizon:
+                uh = self._t.tunnel_radius**2 if self._tunnel_active[j] else 1e3
                 vh = slow[j]
                 self._solver.constraints_set(j, "uh", np.array([1e3] * 4 + [uh, vh]))
             w_c = [qc[j]] * 3
-            if j < N_HORIZON:
-                w = [*w_c, Q_LAG, Q_PROGRESS, *[Q_DRPY] * 3, *[R_RPY] * 3, R_THRUST, R_A_THETA]
-                w += [Q_RP, Q_RP, Q_YAW, *[R_DU] * 3, *[R_D_RPY] * 3, R_D_THRUST]
+            if j < self._t.n_horizon:
+                w = [
+                    *w_c,
+                    self._t.q_lag,
+                    self._t.q_progress,
+                    *[self._t.q_drpy] * 3,
+                    *[self._t.r_rpy] * 3,
+                    self._t.r_thrust,
+                    self._t.r_a_theta,
+                ]
+                w += [
+                    self._t.q_rp,
+                    self._t.q_rp,
+                    self._t.q_yaw,
+                    *[self._t.r_du] * 3,
+                    *[self._t.r_d_rpy] * 3,
+                    self._t.r_d_thrust,
+                ]
                 self._solver.cost_set(j, "W", np.diag(w))
                 self._solver.set(j, "yref", yref)
             else:
-                self._solver.cost_set(j, "W", np.diag([*w_c, Q_LAG]))
-        n_iter = max(int(RTI_ITERS), 1)
+                self._solver.cost_set(j, "W", np.diag([*w_c, self._t.q_lag]))
+        n_iter = max(int(self._t.rti_iters), 1)
         if self._iters_left > 0:
-            n_iter = max(n_iter, int(RTI_ITERS_CHANGE))
+            n_iter = max(n_iter, int(self._t.rti_iters_change))
             self._iters_left -= 1
         for _ in range(n_iter):
             status = self._solver.solve()
@@ -514,7 +597,7 @@ class RacingMPCC(Controller):
         if status not in (0, 2):
             # The real-time iteration failed: replay the previous prediction and restart the solver
             self._solver.reset()
-            for j in range(N_HORIZON + 1):
+            for j in range(self._t.n_horizon + 1):
                 self._solver.set(j, "x", x0)
             self._theta_pred = None
             self._fail_count += 1
@@ -524,8 +607,12 @@ class RacingMPCC(Controller):
             self._cmd = np.array([0.0, 0.0, 0.0, self._hover])
             return self._command(self._cmd)
         self._fail_count = 0
-        self._u_pred = np.array([self._solver.get(j, "x")[18:22] for j in range(1, N_HORIZON + 1)])
-        self._theta_pred = np.array([self._solver.get(j, "x")[16] for j in range(N_HORIZON + 1)])
+        self._u_pred = np.array(
+            [self._solver.get(j, "x")[18:22] for j in range(1, self._t.n_horizon + 1)]
+        )
+        self._theta_pred = np.array(
+            [self._solver.get(j, "x")[16] for j in range(self._t.n_horizon + 1)]
+        )
         self._cmd = self._solver.get(1, "x")[18:22].copy()
         return self._command(self._cmd)
 
